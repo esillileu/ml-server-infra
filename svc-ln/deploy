@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+
+install_link() {
+    local source=$1 destination=$2 current
+    mkdir -p -- "$(dirname -- "$destination")"
+    if [[ -L $destination ]]; then
+        current=$(readlink -f -- "$destination")
+        if [[ $current == "$(readlink -f -- "$source")" ]]; then
+            return 0
+        fi
+        printf 'svc-ln deploy: refusing unexpected symlink: %s\n' "$destination" >&2
+        return 1
+    fi
+    if [[ -e $destination ]]; then
+        printf 'svc-ln deploy: refusing existing path: %s\n' "$destination" >&2
+        return 1
+    fi
+    ln -s -- "$source" "$destination"
+}
+
+install_link "$source_dir/svc-ln" "$HOME/.local/bin/svc-ln"
+install_link "$source_dir/svc-ln@.service" "$config_home/systemd/user/svc-ln@.service"
+install_link "$source_dir/services" "$config_home/svc-ln/services"
+install_link "$source_dir/targets" "$config_home/svc-ln/targets"
+install_link "$source_dir/login-hook.bash" "$config_home/svc-ln/login-hook.bash"
+
+systemctl --user daemon-reload
+printf 'svc-ln files deployed (instances remain disabled and stopped).\n'

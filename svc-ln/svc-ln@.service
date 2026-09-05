@@ -1,0 +1,10 @@
+[Unit]
+Description=Service reverse SSH links to %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/svc-ln _run %i
+Restart=on-failure
+RestartSec=5

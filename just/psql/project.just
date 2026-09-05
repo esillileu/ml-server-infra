@@ -11,4 +11,4 @@ drop name:
         -f /opt/postgres/drop-project.sql
 
 change-pass name:
-    /opt/ml-infra/scripts/project/rotate-project-password.sh {{name}}
+    /opt/infra/scripts/project/rotate-project-password.sh {{name}}

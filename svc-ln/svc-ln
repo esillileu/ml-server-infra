@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+
+set -u
+
+readonly PROGRAM=svc-ln
+readonly CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/svc-ln"
+readonly SERVICES_DIR="$CONFIG_ROOT/services"
+readonly TARGETS_DIR="$CONFIG_ROOT/targets"
+
+usage() { printf 'Usage: %s {on|off|restart} <target>\n       %s status [target]\n' "$PROGRAM" "$PROGRAM" >&2; }
+die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; return 1; }
+valid_name() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; }
+valid_user() { [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]; }
+valid_port() { [[ $1 =~ ^[0-9]+$ && ${#1} -le 5 ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+
+valid_host() {
+    local host=$1 label
+    local -a labels
+    (( ${#host} >= 1 && ${#host} <= 253 )) || return 1
+    IFS=. read -r -a labels <<< "$host"
+    for label in "${labels[@]}"; do
+        (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
+        [[ $label =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+    done
+}
+
+load_service() {
+    local service=$1 file line key value
+    local -A seen=()
+    valid_name "$service" || { die "invalid service name: $service"; return 1; }
+    file="$SERVICES_DIR/$service.conf"
+    [[ -f $file ]] || { die "unknown service: $service"; return 1; }
+    SERVICE_LOCAL_HOST= SERVICE_LOCAL_PORT= SERVICE_REMOTE_PORT=
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ -z $line || $line == \#* ]] && continue
+        [[ $line == *=* ]] || { die "invalid line in $file"; return 1; }
+        key=${line%%=*}; value=${line#*=}
+        [[ -n $key && -n $value ]] || { die "empty key or value in $file"; return 1; }
+        [[ -z ${seen[$key]+x} ]] || { die "duplicate key $key in $file"; return 1; }
+        seen[$key]=1
+        case $key in
+            LOCAL_HOST) SERVICE_LOCAL_HOST=$value ;;
+            LOCAL_PORT) SERVICE_LOCAL_PORT=$value ;;
+            REMOTE_PORT) SERVICE_REMOTE_PORT=$value ;;
+            *) die "unknown key $key in $file"; return 1 ;;
+        esac
+    done < "$file"
+    [[ -n ${seen[LOCAL_HOST]+x} ]] || { die "missing LOCAL_HOST in $file"; return 1; }
+    [[ -n ${seen[LOCAL_PORT]+x} ]] || { die "missing LOCAL_PORT in $file"; return 1; }
+    [[ -n ${seen[REMOTE_PORT]+x} ]] || { die "missing REMOTE_PORT in $file"; return 1; }
+    valid_host "$SERVICE_LOCAL_HOST" || { die "invalid LOCAL_HOST in $file"; return 1; }
+    valid_port "$SERVICE_LOCAL_PORT" || { die "invalid LOCAL_PORT in $file"; return 1; }
+    valid_port "$SERVICE_REMOTE_PORT" || { die "invalid REMOTE_PORT in $file"; return 1; }
+    SERVICE_LOCAL_PORT=$((10#$SERVICE_LOCAL_PORT))
+    SERVICE_REMOTE_PORT=$((10#$SERVICE_REMOTE_PORT))
+}
+
+load_target() {
+    local target=$1 file line key value service
+    local -A seen=() seen_services=() remote_ports=()
+    local -a service_names
+    valid_name "$target" || { die "invalid target name: $target"; return 1; }
+    file="$TARGETS_DIR/$target.conf"
+    [[ -f $file ]] || { die "unknown target: $target"; return 1; }
+    TARGET_HOST= TARGET_USER= TARGET_SSH_PORT=22 TARGET_SERVICE_NAMES=()
+    TARGET_LOCAL_HOSTS=() TARGET_LOCAL_PORTS=() TARGET_REMOTE_PORTS=()
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ -z $line || $line == \#* ]] && continue
+        [[ $line == *=* ]] || { die "invalid line in $file"; return 1; }
+        key=${line%%=*}; value=${line#*=}
+        [[ -n $key && -n $value ]] || { die "empty key or value in $file"; return 1; }
+        [[ -z ${seen[$key]+x} ]] || { die "duplicate key $key in $file"; return 1; }
+        seen[$key]=1
+        case $key in
+            HOST) TARGET_HOST=$value ;;
+            USER) TARGET_USER=$value ;;
+            SSH_PORT) TARGET_SSH_PORT=$value ;;
+            SERVICES)
+                [[ $value != ,* && $value != *, && $value != *,,* ]] || { die "invalid SERVICES in $file"; return 1; }
+                IFS=, read -r -a service_names <<< "$value"
+                TARGET_SERVICE_NAMES=("${service_names[@]}") ;;
+            *) die "unknown key $key in $file"; return 1 ;;
+        esac
+    done < "$file"
+    [[ -n ${seen[HOST]+x} ]] || { die "missing HOST in $file"; return 1; }
+    [[ -n ${seen[USER]+x} ]] || { die "missing USER in $file"; return 1; }
+    [[ -n ${seen[SERVICES]+x} ]] || { die "missing SERVICES in $file"; return 1; }
+    valid_host "$TARGET_HOST" || { die "invalid HOST in $file"; return 1; }
+    valid_user "$TARGET_USER" || { die "invalid USER in $file"; return 1; }
+    valid_port "$TARGET_SSH_PORT" || { die "invalid SSH_PORT in $file"; return 1; }
+    TARGET_SSH_PORT=$((10#$TARGET_SSH_PORT))
+    (( ${#TARGET_SERVICE_NAMES[@]} > 0 )) || { die "empty SERVICES in $file"; return 1; }
+    for service in "${TARGET_SERVICE_NAMES[@]}"; do
+        valid_name "$service" || { die "invalid service reference $service in $file"; return 1; }
+        [[ -z ${seen_services[$service]+x} ]] || { die "duplicate service $service in $file"; return 1; }
+        seen_services[$service]=1
+        load_service "$service" || return 1
+        if [[ -n ${remote_ports[$SERVICE_REMOTE_PORT]+x} ]]; then
+            die "REMOTE_PORT $SERVICE_REMOTE_PORT conflicts between ${remote_ports[$SERVICE_REMOTE_PORT]} and $service in $file"
+            return 1
+        fi
+        remote_ports[$SERVICE_REMOTE_PORT]=$service
+        TARGET_LOCAL_HOSTS+=("$SERVICE_LOCAL_HOST")
+        TARGET_LOCAL_PORTS+=("$SERVICE_LOCAL_PORT")
+        TARGET_REMOTE_PORTS+=("$SERVICE_REMOTE_PORT")
+    done
+}
+
+unit_name() { printf 'svc-ln@%s.service' "$1"; }
+
+target_state() {
+    local target=$1 properties line active= sub=
+    if ! properties=$(systemctl --user show "$(unit_name "$target")" --property=ActiveState --property=SubState --no-pager 2>/dev/null); then
+        STATE=DOWN
+        return 1
+    fi
+    while IFS= read -r line; do
+        case $line in
+            ActiveState=*) active=${line#ActiveState=} ;;
+            SubState=*) sub=${line#SubState=} ;;
+        esac
+    done <<< "$properties"
+    case "$active/$sub" in
+        active/running) STATE=ON ;;
+        activating/*|*/auto-restart) STATE=RECONNECTING ;;
+        inactive/dead) STATE=OFF ;;
+        *) STATE=DOWN ;;
+    esac
+}
+
+print_status_header() { printf 'svc-ln\n'; printf '%-20s %s\n' TARGET STATE; }
+
+service_state() {
+    local target_state=$1 host=$2 port=$3
+    case $target_state in
+        ON)
+            if timeout 1 bash -c 'exec 3<>"/dev/tcp/$1/$2"' svc-ln-probe "$host" "$port" 2>/dev/null; then
+                SERVICE_STATE=ON
+            else
+                SERVICE_STATE=DOWN
+            fi ;;
+        OFF) SERVICE_STATE=OFF ;;
+        RECONNECTING) SERVICE_STATE=RECONNECTING ;;
+        *) SERVICE_STATE=DOWN ;;
+    esac
+}
+
+print_service_status() {
+    local target_state=$1 index local_endpoint remote_endpoint
+    printf '\n%-20s %-22s %-22s %s\n' SERVICE LOCAL REMOTE STATE
+    for index in "${!TARGET_SERVICE_NAMES[@]}"; do
+        local_endpoint="${TARGET_LOCAL_HOSTS[$index]}:${TARGET_LOCAL_PORTS[$index]}"
+        remote_endpoint="127.0.0.1:${TARGET_REMOTE_PORTS[$index]}"
+        service_state "$target_state" "${TARGET_LOCAL_HOSTS[$index]}" "${TARGET_LOCAL_PORTS[$index]}"
+        printf '%-20s %-22s %-22s %s\n' "${TARGET_SERVICE_NAMES[$index]}" "$local_endpoint" "$remote_endpoint" "$SERVICE_STATE"
+    done
+}
+
+status_one() {
+    local target=$1 rc=0
+    valid_name "$target" || { die "invalid target name: $target"; return 1; }
+    target_state "$target" || rc=1
+    print_status_header
+    printf '%-20s %s\n' "$target" "$STATE"
+    load_target "$target" || return 1
+    print_service_status "$STATE"
+    return "$rc"
+}
+
+configured_targets() {
+    local file target rc=0
+    local -a files=()
+    shopt -s nullglob
+    files=("$TARGETS_DIR"/*.conf)
+    shopt -u nullglob
+    for file in "${files[@]}"; do
+        target=${file##*/}; target=${target%.conf}
+        if valid_name "$target"; then printf '%s\n' "$target"; else die "invalid configured target name: $target"; rc=1; fi
+    done
+    return "$rc"
+}
+
+status_all() {
+    local target rc=0 list_rc=0 output
+    local -a targets=()
+    if ! output=$(configured_targets); then list_rc=1; fi
+    if [[ -n $output ]]; then mapfile -t targets < <(printf '%s\n' "$output" | LC_ALL=C sort); fi
+    (( list_rc == 0 )) || rc=1
+    print_status_header
+    for target in "${targets[@]}"; do
+        if ! target_state "$target"; then rc=1; fi
+        printf '%-20s %s\n' "$target" "$STATE"
+    done
+    return "$rc"
+}
+
+run_ssh() {
+    local target=$1 index
+    local -a command=(ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
+    load_target "$target" || return 1
+    command+=(-p "$TARGET_SSH_PORT")
+    for index in "${!TARGET_SERVICE_NAMES[@]}"; do
+        command+=(-R "127.0.0.1:${TARGET_REMOTE_PORTS[$index]}:${TARGET_LOCAL_HOSTS[$index]}:${TARGET_LOCAL_PORTS[$index]}")
+    done
+    command+=("${TARGET_USER}@${TARGET_HOST}")
+    exec "${command[@]}"
+}
+
+main() {
+    local command=${1:-} target unit rc=0
+    case $command in
+        on|restart)
+            [[ $# == 2 ]] || { usage; return 2; }
+            target=$2
+            load_target "$target" || return 1
+            unit=$(unit_name "$target")
+            if [[ $command == on ]]; then command=start; fi
+            if ! systemctl --user "$command" "$unit"; then rc=1; fi
+            status_one "$target" || rc=1
+            return "$rc" ;;
+        off)
+            [[ $# == 2 ]] || { usage; return 2; }
+            target=$2
+            valid_name "$target" || { die "invalid target name: $target"; return 1; }
+            systemctl --user stop "$(unit_name "$target")" || return 1
+            printf '%s: OFF\n' "$target" ;;
+        status)
+            if [[ $# == 1 ]]; then status_all
+            elif [[ $# == 2 ]]; then status_one "$2"
+            else usage; return 2; fi ;;
+        _run)
+            [[ $# == 2 ]] || { usage; return 2; }
+            run_ssh "$2" ;;
+        *) usage; return 2 ;;
+    esac
+}
+
+main "$@"

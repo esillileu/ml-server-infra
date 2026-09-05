@@ -19,7 +19,7 @@ PublishPort=127.0.0.1:5001:5000
 
 Exec=mlflow server \
 --backend-store-uri postgresql+psycopg2://mlflow_f1@postgres:5432/mlflow_f1 \
---allowed-hosts localhost:5001,127.0.0.1:5001,esillileu-server.tail4941d3.ts.net \
+--allowed-hosts localhost:5001,127.0.0.1:5001,127.0.0.1:15001,esillileu-server.tail4941d3.ts.net \
 --cors-allowed-origins https://esillileu-server.tail4941d3.ts.net \
 --static-prefix /mlflow-f1 \
 --artifacts-destination /mlartifacts \
