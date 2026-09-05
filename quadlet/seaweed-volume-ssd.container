@@ -1,0 +1,21 @@
+[Unit]
+Description=SeaweedFS SSD volume server
+Requires=seaweed-master.container
+After=seaweed-master.container
+
+[Container]
+Image=docker.io/chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
+ContainerName=seaweed-volume-ssd
+Network=postgres.network
+Volume=/persist/srv/seaweedfs/volume-ssd:/data
+Exec=volume -mserver=seaweed-master:9333 -ip=seaweed-volume-ssd -ip.bind=0.0.0.0 -port=8080 -dir=/data -max=0
+HealthCmd=wget -q --spider http://127.0.0.1:8080/status
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

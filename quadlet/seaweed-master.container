@@ -1,0 +1,19 @@
+[Unit]
+Description=SeaweedFS master
+
+[Container]
+Image=docker.io/chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
+ContainerName=seaweed-master
+Network=postgres.network
+Volume=/persist/srv/seaweedfs/master:/data
+Exec=master -ip=seaweed-master -ip.bind=0.0.0.0 -port=9333 -mdir=/data -defaultReplication=000
+HealthCmd=wget -q --spider http://127.0.0.1:9333/cluster/status
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

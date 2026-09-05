@@ -1,0 +1,22 @@
+[Unit]
+Description=SeaweedFS S3 gateway
+Requires=seaweed-filer.container
+After=seaweed-filer.container
+
+[Container]
+Image=docker.io/chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
+ContainerName=seaweed-s3
+Network=postgres.network
+Secret=seaweed_s3_config,target=/run/secrets/s3.json,uid=1000,gid=1000,mode=0400
+PublishPort=127.0.0.1:9000:8333
+Exec=s3 -filer=seaweed-filer:8888 -ip.bind=0.0.0.0 -port=8333 -port.iceberg=0 -iam=false -config=/run/secrets/s3.json
+HealthCmd=wget -q --spider http://127.0.0.1:8333/healthz
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
