@@ -248,3 +248,47 @@ SeaweedFS 적용 전에는 F2 Quadlet 백업을 복원하면 된다. S3 전환 �
 runbook에 자동 삭제/덮어쓰기 명령으로 제공하지 않으며 별도 승인과 백업 계획이 필요하다.
 
 장애 시에도 source 또는 target 삭제, `rclone sync`, overwrite 옵션을 사용하지 않는다.
+
+## 8. Tailnet S3 HTTPS 및 Presigned Multipart 운영
+
+외부 분석 장비가 Tailnet을 통해 대용량 artifact를 병렬 chunk로 직접 업로드·다운로드할 수 있도록
+Tailnet 전용 S3 HTTPS endpoint를 운영한다.
+
+- **외부 S3 엔드포인트**: `https://esillileu-server.tail4941d3.ts.net:9000`
+- **로컬 바인딩**: `127.0.0.1:9000` (Tailscale Serve가 `100.89.18.91:9000`에서 종단)
+- **MLflow Quadlet 환경변수**:
+  - `Environment=MLFLOW_S3_ENDPOINT_URL=https://esillileu-server.tail4941d3.ts.net:9000`
+  - `Environment=MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE=path`
+
+### 8.1 Tailscale Serve 명령
+
+```bash
+# 활성화 (기존 443, 5432 설정 보존)
+sudo tailscale serve --bg --https=9000 http://127.0.0.1:9000
+
+# 비활성화 (롤백 시)
+sudo tailscale serve --https=9000 off
+```
+
+### 8.2 검증 명령
+
+```bash
+# S3 호환성, 서명(SigV4), Presigned GET/PUT/Multipart 전수 검증
+just seaweed test-s3-endpoint https://esillileu-server.tail4941d3.ts.net:9000
+
+# MLflow F1/F2 15 MiB multipart upload/download smoke 검증
+just seaweed smoke-multipart-f1
+just seaweed smoke-multipart-f2
+```
+
+### 8.3 외부 분석 장비 설정
+
+외부 장비에서 대용량 artifact 직접 multipart 전송을 활성화하려면:
+
+```bash
+export MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=true
+export MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=true
+```
+
+문제가 발생할 경우 환경변수를 `false`로 되돌리면 즉시 기존 MLflow proxy streaming 경로로 복귀한다.
+
