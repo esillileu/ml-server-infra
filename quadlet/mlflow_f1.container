@@ -14,7 +14,8 @@ Secret=mlflow_f1_pgpass,target=/run/secrets/pgpass,mode=0600
 Secret=mlflow_f1_s3_access_key,type=env,target=AWS_ACCESS_KEY_ID
 Secret=mlflow_f1_s3_secret_key,type=env,target=AWS_SECRET_ACCESS_KEY
 Environment=PGPASSFILE=/run/secrets/pgpass
-Environment=MLFLOW_S3_ENDPOINT_URL=http://seaweed-s3:8333
+Environment=MLFLOW_S3_ENDPOINT_URL=https://esillileu-server.tail4941d3.ts.net:9000
+Environment=MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE=path
 Environment=AWS_DEFAULT_REGION=us-east-1
 Environment=AWS_REGION=us-east-1
 
