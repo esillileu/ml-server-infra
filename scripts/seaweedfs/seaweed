@@ -17,7 +17,7 @@ cleanup_tmp_dirs() {
 trap cleanup_tmp_dirs EXIT
 
 usage() {
-  echo "usage: seaweed {preflight|bootstrap-buckets|copy-f1-completed|verify-f1-completed|copy-f1-final|verify-f1-final|verify-f1-existing|status|smoke-f1|smoke-f2}" >&2
+  echo "usage: seaweed {preflight|bootstrap-buckets|copy-f1-completed|verify-f1-completed|copy-f1-final|verify-f1-final|verify-f1-existing|status|smoke-f1|smoke-f2|test-s3-endpoint|smoke-multipart-f1|smoke-multipart-f2}" >&2
   exit 2
 }
 
@@ -210,6 +210,19 @@ PY
     mlflow_f1 python - <"$SCRIPT_DIR/verify_existing.py"
 }
 
+smoke_multipart() {
+  local instance=$1
+  need podman
+  podman exec -i -e "MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-$instance" "mlflow_$instance" \
+    python - <"$SCRIPT_DIR/smoke_multipart.py"
+}
+
+test_s3_endpoint() {
+  local endpoint=${1:-https://esillileu-server.tail4941d3.ts.net:9000}
+  need python3; need podman
+  python3 "$SCRIPT_DIR/test_s3_compatibility.py" --endpoint "$endpoint"
+}
+
 case "${1:-}" in
   preflight) preflight ;;
   bootstrap-buckets) bootstrap_buckets ;;
@@ -221,5 +234,8 @@ case "${1:-}" in
   status) status ;;
   smoke-f1) smoke_mlflow f1 ;;
   smoke-f2) smoke_mlflow f2 ;;
+  smoke-multipart-f1) smoke_multipart f1 ;;
+  smoke-multipart-f2) smoke_multipart f2 ;;
+  test-s3-endpoint) shift; test_s3_endpoint "$@" ;;
   *) usage ;;
 esac
