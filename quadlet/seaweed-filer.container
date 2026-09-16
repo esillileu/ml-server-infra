@@ -1,7 +1,7 @@
 [Unit]
 Description=SeaweedFS filer
-Requires=seaweed-master.container seaweed-volume-ssd.container
-After=seaweed-master.container seaweed-volume-ssd.container
+Requires=seaweed-master.container seaweed-volume.container
+After=seaweed-master.container seaweed-volume.container
 
 [Container]
 Image=docker.io/chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
