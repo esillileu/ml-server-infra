@@ -41,9 +41,10 @@ repository owner가 수정하고, `svc-infra` 운영자는 `systemctl --user dae
 | PostgreSQL | `127.0.0.1:5432` | MLflow backend DB 및 프로젝트 DB |
 | SeaweedFS S3 | `http://127.0.0.1:9000` | MLflow artifact와 F2 corpus |
 
-SeaweedFS는 `master`, `volume-ssd`, `filer`, `s3`의 네 Quadlet 서비스로 분리되어 있다.
-master/filer metadata와 volume 데이터는 `/persist/srv/seaweedfs`에 영속화된다. S3 gateway만
-host loopback의 9000번 포트에 공개되며 관리 포트는 host에 공개하지 않는다.
+SeaweedFS는 `master`, `volume`, `filer`, `s3`의 네 Quadlet 서비스로 분리되어 있다.
+master/filer metadata는 `/persist/srv/seaweedfs`에 영속화되고, bulk volume 데이터는
+ext4 HDD의 `/data/srv/seaweedfs/volume`에 영속화된다. S3 gateway만 host loopback의
+9000번 포트에 공개되며 관리 포트는 host에 공개하지 않는다.
 
 버킷과 credential은 용도별로 분리한다.
 
@@ -52,8 +53,21 @@ host loopback의 9000번 포트에 공개되며 관리 포트는 host에 공개�
 - `f2-corpus`: F2 corpus 전용
 
 credential과 SeaweedFS IAM JSON은 Git 파일이 아니라 `svc-infra`의 Podman secret으로
-관리한다. 로컬 artifact 원본 `/persist/srv/mlflow/mlflow_f1`은 이관 완료 후에도 자동으로
-삭제하지 않는다.
+관리한다.
+
+### 파일시스템 레이아웃 및 아카이브 상태
+- **Active state**:
+  - `/persist/srv/seaweedfs/master`: Master metadata
+  - `/persist/srv/seaweedfs/filer`: Filer metadata
+  - `/data/srv/seaweedfs/volume`: Bulk volume storage (HDD)
+- **Inactive / Archive & Rollback (active 코드 및 서비스에서 참조 금지)**:
+  - `/persist/srv/seaweedfs/archive/f1-local-to-s3`: 과거 F1 S3 마이그레이션 보고서 보관소
+  - `/persist/srv/seaweedfs/rollback/volume-<UTC_TIMESTAMP>`: cutover 직전 old SSD volume rollback copy
+  - `/persist/srv/mlflow/archive/f1-pre-s3`: 과거 F1 로컬 파일시스템 원본 artifact 보관소
+
+### 이력 메모 (Historical Note)
+- **F1 local filesystem → S3 migration**: 완료 (전체 artifact S3 보관 및 검증 완료)
+- **SeaweedFS bulk volume SSD → `/data` HDD migration**: 완료 (Quadlet `seaweed-volume`으로 중립화 및 ext4 HDD 이관 완료)
 
 ## 상태 확인
 
@@ -61,7 +75,7 @@ credential과 SeaweedFS IAM JSON은 Git 파일이 아니라 `svc-infra`의 Podma
 cd /opt/infra
 just seaweed status
 systemctl --user --no-pager --full status \
-  seaweed-master.service seaweed-volume-ssd.service \
+  seaweed-master.service seaweed-volume.service \
   seaweed-filer.service seaweed-s3.service \
   mlflow_f1.service mlflow_f2.service
 ```
@@ -69,20 +83,16 @@ systemctl --user --no-pager --full status \
 SeaweedFS 네 컨테이너는 `healthy`, F1/F2 endpoint는 `UP`이어야 한다. S3 anonymous 요청은
 거부되는 것이 정상이다.
 
-SeaweedFS 구축, bucket bootstrap, MLflow artifact 이관, 검증, 장애 중단 조건과 rollback은
-[SeaweedFS/MLflow 운영 runbook](docs/seaweedfs-runbook.md)을 따른다. 주요 검증 명령은 다음과
-같다.
+주요 검증 명령은 다음과 같다.
 
 ```bash
-just seaweed preflight
-just seaweed verify-f1-final
-just seaweed verify-f1-existing
+just seaweed verify-f1-known-good
 just seaweed smoke-f1
 just seaweed smoke-f2
+just seaweed smoke-multipart-f1
+just seaweed smoke-multipart-f2
+just seaweed test-s3-endpoint
 ```
-
-`copy-f1-*`는 일상적인 동기화 명령이 아니라 이관 작업용이다. source 삭제, target 삭제,
-`rclone sync` 또는 overwrite를 수행하지 않는다.
 
 ## `svc-ln` reverse link
 
