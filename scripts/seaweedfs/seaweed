@@ -17,29 +17,8 @@ cleanup_tmp_dirs() {
 trap cleanup_tmp_dirs EXIT
 
 usage() {
-  echo "usage: seaweed {preflight|bootstrap-buckets|copy-f1-completed|verify-f1-completed|copy-f1-final|verify-f1-final|verify-f1-existing|status|smoke-f1|smoke-f2|test-s3-endpoint|smoke-multipart-f1|smoke-multipart-f2}" >&2
+  echo "usage: seaweed {bootstrap-buckets|verify-f1-known-good|status|smoke-f1|smoke-f2|test-s3-endpoint|smoke-multipart-f1|smoke-multipart-f2}" >&2
   exit 2
-}
-
-preflight() {
-  need curl; need jq; need python3; need podman; need rclone
-  local rclone_version
-  rclone_version="$(rclone version | awk 'NR == 1 {sub(/^rclone v/, ""); sub(/-.*/, ""); print}')"
-  [[ "$(printf '%s\n%s\n' 1.75.1 "$rclone_version" | sort -V | head -1)" == 1.75.1 ]] || {
-    echo "ERROR: rclone >= 1.75.1 required; found $rclone_version" >&2
-    exit 2
-  }
-  [[ -d "$SOURCE_ROOT" ]] || { echo "ERROR: missing source: $SOURCE_ROOT" >&2; exit 1; }
-  "$SCRIPT_DIR/migration.py" inspect --source "$SOURCE_ROOT" \
-    --mlflow-url "${MLFLOW_F1_URL:-http://127.0.0.1:5001/mlflow-f1}"
-  local source_bytes source_files available required
-  source_bytes="$(du -sb "$SOURCE_ROOT" | awk '{print $1}')"
-  source_files="$(find "$SOURCE_ROOT" -type f -printf . | wc -c)"
-  available="$(df -B1 --output=avail "$DATA_ROOT" | tail -1 | tr -d ' ')"
-  required=$((source_bytes * 3 / 2 + 50000000000))
-  (( available >= required )) || { echo "ERROR: need >= $required free bytes; have $available" >&2; exit 1; }
-  curl -fsS "${MLFLOW_F1_URL:-http://127.0.0.1:5001/mlflow-f1}/health" >/dev/null
-  echo "OK account=svc-infra rclone=$rclone_version source_bytes=$source_bytes source_files=$source_files available_bytes=$available"
 }
 
 bootstrap_buckets() {
@@ -96,70 +75,6 @@ EOF
   echo 'OK buckets exist and sampled cross-bucket access was denied'
 }
 
-latest_report() {
-  local mode=$1
-  local pointer="$REPORT_ROOT/latest-$mode"
-  [[ -f "$pointer" ]] || { echo "ERROR: no copy report for $mode" >&2; exit 1; }
-  local dir; dir="$(<"$pointer")"
-  [[ -d "$dir" ]] || { echo "ERROR: report missing: $dir" >&2; exit 1; }
-  printf '%s\n' "$dir"
-}
-
-copy_f1() {
-  local mode=$1 report tmp
-  need python3; need podman; need rclone
-  report="$(new_report_dir "$mode")"; tmp="$(mktemp -d)"; TMP_DIRS+=("$tmp")
-  "$SCRIPT_DIR/migration.py" prepare --source "$SOURCE_ROOT" --report "$report" \
-    --mlflow-url "${MLFLOW_F1_URL:-http://127.0.0.1:5001/mlflow-f1}" --mode "$mode" | tee "$report/prepare.log"
-  if [[ "$mode" == final ]]; then
-    mv "$report/sha256.txt" "$report/sha256.first.txt"
-    mv "$report/paths.txt" "$report/paths.first.txt"
-    mv "$report/runs.json" "$report/runs.first.json"
-    mv "$report/summary.json" "$report/summary.first.json"
-    mv "$report/prepare.log" "$report/prepare.first.log"
-    "$SCRIPT_DIR/migration.py" prepare --source "$SOURCE_ROOT" --report "$report" \
-      --mlflow-url "${MLFLOW_F1_URL:-http://127.0.0.1:5001/mlflow-f1}" --mode "$mode" | tee "$report/prepare.log"
-    for name in sha256.txt paths.txt runs.json summary.json; do
-      first="${name%.*}.first.${name##*.}"
-      if ! cmp -s "$report/$first" "$report/$name"; then
-        echo "ERROR: F1 changed between final manifests ($name); stop writers and retry; report=$report" >&2
-        exit 1
-      fi
-    done
-    echo 'OK two consecutive F1 manifests match'
-  fi
-  make_rclone_config mlflow_f1_s3_access_key mlflow_f1_s3_secret_key "$tmp/rclone.conf"
-  rclone copy "$SOURCE_ROOT" seaweed:mlflow-f1-artifacts --config "$tmp/rclone.conf" \
-    --files-from-raw "$report/paths.txt" --immutable --bwlimit 25Mi --transfers 2 --checkers 2 \
-    --log-file "$report/rclone-copy.log" --log-level INFO
-  printf '%s\n' "$report" >"$REPORT_ROOT/latest-$mode"
-  echo "OK copied without deletion; report=$report"
-}
-
-verify_f1() {
-  local mode=$1 report tmp expected_count expected_bytes actual_count actual_bytes
-  need jq; need podman; need rclone
-  report="$(latest_report "$mode")"; tmp="$(mktemp -d)"; TMP_DIRS+=("$tmp")
-  make_rclone_config mlflow_f1_s3_access_key mlflow_f1_s3_secret_key "$tmp/rclone.conf"
-  if ! rclone checksum SHA-256 "$report/sha256.txt" seaweed:mlflow-f1-artifacts \
-      --config "$tmp/rclone.conf" --download --checkers 2 \
-      --files-from-raw "$report/paths.txt" \
-      --log-file "$report/rclone-verify.log" --log-level INFO; then
-    echo "ERROR: checksum verification failed; report=$report" >&2; exit 1
-  fi
-  expected_count="$(jq -r .files "$report/summary.json")"
-  expected_bytes="$(jq -r .bytes "$report/summary.json")"
-  rclone size seaweed:mlflow-f1-artifacts --config "$tmp/rclone.conf" --json \
-    --files-from-raw "$report/paths.txt" >"$report/target-size.json"
-  actual_count="$(jq -r .count "$report/target-size.json")"
-  actual_bytes="$(jq -r .bytes "$report/target-size.json")"
-  [[ "$expected_count" == "$actual_count" && "$expected_bytes" == "$actual_bytes" ]] || {
-    echo "ERROR: size mismatch expected=$expected_count/$expected_bytes actual=$actual_count/$actual_bytes" >&2; exit 1;
-  }
-  jq -e '.excluded_running | type == "array"' "$report/runs.json" >/dev/null
-  echo "OK sha256/count/bytes match; files=$actual_count bytes=$actual_bytes report=$report"
-}
-
 status() {
   need curl; need podman
   for url in http://127.0.0.1:9000/healthz http://127.0.0.1:5001/mlflow-f1/health http://127.0.0.1:5002/mlflow-f2/health; do
@@ -177,37 +92,21 @@ smoke_mlflow() {
   local instance=$1
   need podman
   podman exec -i -e "MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-$instance" "mlflow_$instance" \
-    python - <"$SCRIPT_DIR/smoke_f2.py"
+    python - <"$SCRIPT_DIR/smoke_mlflow.py"
 }
 
-verify_f1_existing() {
-  local report selection run_id artifact_path expected
-  need jq; need podman; need python3
-  report="$(latest_report final)"
-  selection="$(python3 - "$report" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-report = Path(sys.argv[1])
-selected = {(str(item[0]), str(item[1])) for item in json.loads((report / "runs.json").read_text())["selected"]}
-for line in (report / "sha256.txt").read_text().splitlines():
-    digest, separator, relative = line.partition("  ")
-    parts = relative.split("/")
-    if separator and len(parts) >= 4 and (parts[0], parts[1]) in selected and parts[2] == "artifacts":
-        print(json.dumps({"run_id": parts[1], "artifact_path": "/".join(parts[3:]), "sha256": digest}))
-        break
-else:
-    raise SystemExit("ERROR: no existing active run artifact found in final manifest")
-PY
-)"
-  run_id="$(jq -r .run_id <<<"$selection")"
-  artifact_path="$(jq -r .artifact_path <<<"$selection")"
-  expected="$(jq -r .sha256 <<<"$selection")"
+verify_f1_known_good() {
+  need jq; need podman
+  local config="$SCRIPT_DIR/f1_known_good_artifact.json"
+  [[ -f "$config" ]] || { echo "ERROR: missing $config" >&2; exit 1; }
+  local run_id artifact_path expected
+  run_id="$(jq -er .run_id "$config")"
+  artifact_path="$(jq -er .artifact_path "$config")"
+  expected="$(jq -er .sha256 "$config")"
   podman exec -i \
     -e MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-f1 \
     -e "RUN_ID=$run_id" -e "ARTIFACT_PATH=$artifact_path" -e "EXPECTED_SHA256=$expected" \
-    mlflow_f1 python - <"$SCRIPT_DIR/verify_existing.py"
+    mlflow_f1 python - <"$SCRIPT_DIR/verify_known_good.py"
 }
 
 smoke_multipart() {
@@ -224,13 +123,8 @@ test_s3_endpoint() {
 }
 
 case "${1:-}" in
-  preflight) preflight ;;
   bootstrap-buckets) bootstrap_buckets ;;
-  copy-f1-completed) copy_f1 completed ;;
-  verify-f1-completed) verify_f1 completed ;;
-  copy-f1-final) copy_f1 final ;;
-  verify-f1-final) verify_f1 final ;;
-  verify-f1-existing) verify_f1_existing ;;
+  verify-f1-known-good) verify_f1_known_good ;;
   status) status ;;
   smoke-f1) smoke_mlflow f1 ;;
   smoke-f2) smoke_mlflow f2 ;;

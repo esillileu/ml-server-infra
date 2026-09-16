@@ -18,4 +18,4 @@ with tempfile.TemporaryDirectory() as directory:
     actual = hashlib.sha256(Path(downloaded).read_bytes()).hexdigest()
     if actual != expected:
         raise SystemExit(f"SHA-256 mismatch: expected={expected} actual={actual}")
-    print(f"OK existing run_id={run_id} artifact={artifact_path} sha256={actual}")
+    print(f"OK known-good run_id={run_id} artifact={artifact_path} sha256={actual}")

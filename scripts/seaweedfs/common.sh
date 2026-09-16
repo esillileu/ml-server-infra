@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly REPO_ROOT=/opt/infra
-readonly DATA_ROOT=/persist/srv/seaweedfs
-readonly SOURCE_ROOT=/persist/srv/mlflow/mlflow_f1
-readonly REPORT_ROOT="$DATA_ROOT/migration-reports"
-readonly S3_ENDPOINT=http://127.0.0.1:9000
+readonly LOCAL_S3_ENDPOINT=http://127.0.0.1:9000
 
 require_service_account() {
   if [[ "$(id -un)" != svc-infra || "$(id -u)" != 1001 ]]; then
@@ -36,18 +32,10 @@ make_rclone_config() {
     echo 'env_auth = false'
     printf 'access_key_id = %s\n' "$access_key"
     printf 'secret_access_key = %s\n' "$secret_key"
-    echo 'endpoint = http://127.0.0.1:9000'
+    printf 'endpoint = %s\n' "$LOCAL_S3_ENDPOINT"
     echo 'region = us-east-1'
     echo 'force_path_style = true'
     printf 'no_check_bucket = %s\n' "$no_check_bucket"
   } >"$config"
   unset access_key secret_key
-}
-
-new_report_dir() {
-  local kind=$1 stamp dir
-  stamp="$(date -u +%Y%m%dT%H%M%S.%NZ)"
-  dir="$REPORT_ROOT/$stamp-$kind"
-  mkdir -p "$dir"
-  printf '%s\n' "$dir"
 }

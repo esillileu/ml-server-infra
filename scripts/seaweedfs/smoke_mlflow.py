@@ -7,11 +7,11 @@ import mlflow
 
 payload = os.urandom(1024 * 1024)
 expected = hashlib.sha256(payload).hexdigest()
-mlflow.set_experiment("migration-smoke")
+mlflow.set_experiment("seaweedfs-smoke")
 with tempfile.TemporaryDirectory() as directory:
     source = Path(directory, "seaweedfs-sentinel.bin")
     source.write_bytes(payload)
-    with mlflow.start_run(run_name="seaweedfs-cutover-smoke") as run:
+    with mlflow.start_run(run_name="artifact-smoke") as run:
         mlflow.log_artifact(str(source), artifact_path="sentinel")
         downloaded = mlflow.artifacts.download_artifacts(
             run_id=run.info.run_id, artifact_path="sentinel/seaweedfs-sentinel.bin",

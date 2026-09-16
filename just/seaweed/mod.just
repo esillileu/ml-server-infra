@@ -3,26 +3,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 root := justfile_directory()
 tool := root + "/scripts/seaweedfs/seaweed"
 
-preflight:
-    {{tool}} preflight
-
 bootstrap-buckets:
     {{tool}} bootstrap-buckets
 
-copy-f1-completed:
-    ionice -c3 nice -n 19 {{tool}} copy-f1-completed
-
-verify-f1-completed:
-    ionice -c3 nice -n 19 {{tool}} verify-f1-completed
-
-copy-f1-final:
-    ionice -c3 nice -n 19 {{tool}} copy-f1-final
-
-verify-f1-final:
-    ionice -c3 nice -n 19 {{tool}} verify-f1-final
-
-verify-f1-existing:
-    {{tool}} verify-f1-existing
+verify-f1-known-good:
+    {{tool}} verify-f1-known-good
 
 status:
     {{tool}} status
@@ -44,4 +29,3 @@ smoke-multipart-f2:
 
 rotate-corpus-key:
     {{root}}/scripts/seaweedfs/rotate-corpus-key.sh
-
