@@ -22,7 +22,7 @@ usage() {
 }
 
 bootstrap_buckets() {
-  need podman; need rclone
+  need jq; need podman; need rclone
   local tmp
   tmp="$(mktemp -d)"; TMP_DIRS+=("$tmp")
   local iam_json identity configured_access configured_secret
