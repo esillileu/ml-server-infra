@@ -35,7 +35,7 @@ export PATH="$TEST_ROOT/bin:$PATH"
 export MOCK_SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
 : >"$MOCK_SYSTEMCTL_LOG"
 
-output=$($SOURCE_DIR/svc-ln _run super)
+output=$($SOURCE_DIR/svc-ln _run 181)
 assert_contains "$output" '<127.0.0.1:15001:127.0.0.1:5001>'
 assert_contains "$output" '<127.0.0.1:15002:127.0.0.1:5002>'
 assert_contains "$output" '<127.0.0.1:15432:127.0.0.1:5432>'
@@ -44,20 +44,20 @@ assert_contains "$output" '<127.0.0.1:19000:127.0.0.1:9000>'
 [[ $output != *Compression* ]] || fail 'compression must not be enabled'
 
 export MOCK_ACTIVE=active MOCK_SUB=running
-$SOURCE_DIR/svc-ln on super >/dev/null
-assert_contains "$(<"$MOCK_SYSTEMCTL_LOG")" '--user start svc-ln@super.service'
-$SOURCE_DIR/svc-ln restart super >/dev/null
-assert_contains "$(<"$MOCK_SYSTEMCTL_LOG")" '--user restart svc-ln@super.service'
+$SOURCE_DIR/svc-ln on 181 >/dev/null
+assert_contains "$(<"$MOCK_SYSTEMCTL_LOG")" '--user start svc-ln@181.service'
+$SOURCE_DIR/svc-ln restart 181 >/dev/null
+assert_contains "$(<"$MOCK_SYSTEMCTL_LOG")" '--user restart svc-ln@181.service'
 
 for state in 'active running ON' 'activating auto-restart RECONNECTING' 'inactive dead OFF' 'failed failed DOWN'; do
     read -r MOCK_ACTIVE MOCK_SUB expected <<<"$state"
     export MOCK_ACTIVE MOCK_SUB
-    output=$($SOURCE_DIR/svc-ln status super)
+    output=$($SOURCE_DIR/svc-ln status 181)
     assert_contains "$output" "$expected"
 done
 
 export MOCK_SYSTEMCTL_FAIL=1
-assert_fails "$SOURCE_DIR/svc-ln" status super
+assert_fails "$SOURCE_DIR/svc-ln" status 181
 assert_contains "$(<"$TEST_ROOT/out")" DOWN
 unset MOCK_SYSTEMCTL_FAIL
 

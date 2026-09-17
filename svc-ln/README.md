@@ -39,7 +39,7 @@ missing, or empty keys; invalid names, hosts, users, or ports; missing or
 duplicate service references; and duplicate remote ports within a target are
 rejected. Ports must be in `1..65535`.
 
-The checked-in `super` target creates one connection with these forwards:
+The checked-in `181` target creates one connection with these forwards:
 
 ```text
 127.0.0.1:15001 -> 127.0.0.1:5001  (mlflow-f1)
@@ -88,12 +88,12 @@ The new deploy intentionally does not remove legacy paths automatically.
 ## Operate
 
 ```bash
-svc-ln on super
-svc-ln status super
+svc-ln on 181
+svc-ln status 181
 svc-ln status
-svc-ln restart super
-svc-ln off super
-journalctl --user -u svc-ln@super.service
+svc-ln restart 181
+svc-ln off 181
+journalctl --user -u svc-ln@181.service
 ```
 
 `on` starts a validated target. `restart` validates the current configuration
@@ -137,4 +137,4 @@ connecting to these ports through the target's non-loopback address fails.
 Check the remote sshd `GatewayPorts` setting. `no` (the default) or
 `clientspecified` preserves the requested loopback binding. `GatewayPorts yes`
 can replace it with a wildcard listener and expose forwarded services on
-external interfaces. After `svc-ln off super`, the listeners must disappear.
+external interfaces. After `svc-ln off 181`, the listeners must disappear.

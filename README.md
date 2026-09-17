@@ -96,10 +96,10 @@ just seaweed test-s3-endpoint
 
 ## `svc-ln` reverse link
 
-`svc-ln`은 `super` 대상(`user3@163.152.23.181`)으로 하나의 SSH 연결을 만들고, 서비스별
+`svc-ln`은 `181` 대상(`user3@163.152.23.181`)으로 하나의 SSH 연결을 만들고, 서비스별
 remote loopback 포트를 이 서버의 local endpoint로 전달한다.
 
-| 서비스 | 이 서버 | `super` 서버에서 접근할 주소 |
+| 서비스 | 이 서버 | `181` 서버에서 접근할 주소 |
 |---|---|---|
 | MLflow F1 | `127.0.0.1:5001` | `127.0.0.1:15001` |
 | MLflow F2 | `127.0.0.1:5002` | `127.0.0.1:15002` |
@@ -110,17 +110,17 @@ remote loopback 포트를 이 서버의 local endpoint로 전달한다.
 
 ```bash
 just svc-ln-deploy
-svc-ln on super
-svc-ln status super
+svc-ln on 181
+svc-ln status 181
 ```
 
 설정 변경 후 실행 중인 SSH 연결에 새 forward를 반영하려면 명시적으로 재시작한다.
 
 ```bash
-svc-ln restart super
+svc-ln restart 181
 ```
 
-S3 reverse link는 `super` 서버에서 확인한다.
+S3 reverse link는 `181` 서버에서 확인한다.
 
 ```bash
 curl -fsS http://127.0.0.1:19000/healthz
