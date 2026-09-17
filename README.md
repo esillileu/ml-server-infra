@@ -160,6 +160,4 @@ just psql default -c '\l'
 - 에이전트/repository owner는 설정과 스크립트를 작성하고 정적 검증한다.
 - `svc-infra` 운영자는 Podman pull/secret, Quadlet reload, 서비스 start/restart를 수행한다.
 - secret 값, IAM JSON, 임시 rclone config와 migration payload는 Git에 저장하지 않는다.
-- HDD 추가, local artifact 삭제, `mlflow gc`, S3 rollback은 별도 검토와 승인 후 수행한다.
-- S3 전환 뒤 새 artifact가 기록됐다면 local destination으로 단순 복귀하지 않는다. writer를
-  멈추고 S3→local 역복사 및 checksum 검증을 먼저 수행한다.
+- active storage relocation, archive 삭제, `mlflow gc`, rollback은 별도 검토와 승인 후 수행한다.

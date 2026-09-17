@@ -132,15 +132,9 @@ just seaweed test-s3-endpoint
 
 ## 5. Rollback 정책
 
-HDD 볼륨 문제 발생 시 SSD 복귀 절차는 장애 발생 시점(신규 쓰기 발생 여부)에 따라 2가지로 구분된다.
+HDD 볼륨 문제 발생 후 SSD rollback copy로 복귀해야 하는 경우 다음 절차를 수행한다.
 
-### 5.1 Direct Rollback (신규 쓰기 발생 전)
-신규 write가 발생하기 전(Read-only 검증 단계 실패 등)에는 데이터 변경이 없으므로 단순 mount 복귀를 수행한다.
-- 서비스명은 `seaweed-volume`을 유지하며, `quadlet/seaweed-volume.container`의 볼륨 마운트만 SSD 경로로 변경:
-  `Volume=/persist/srv/seaweedfs/volume-ssd:/data`
-- `systemctl --user daemon-reload` 후 서비스 재기동
-
-### 5.2 Post-write Reverse Sync Rollback (신규 쓰기 발생 후)
+### 5.1 Reverse Sync Rollback
 HDD에 이미 새 artifact/corpus 쓰기가 발생한 뒤 SSD로 복귀해야 하는 경우:
 1. 모든 외부 writer freeze
 2. 서비스 순차 정지 (MLflow → S3 → Filer → Volume → Master)
