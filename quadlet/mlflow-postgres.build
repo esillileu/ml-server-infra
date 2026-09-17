@@ -5,3 +5,6 @@ Description=Build MLflow with PostgreSQL support
 ImageTag=localhost/mlflow-postgres:3.15.1
 File=/opt/infra/images/mlflow/Containerfile
 SetWorkingDirectory=/opt/infra/images/mlflow
+
+[Service]
+RemainAfterExit=yes

@@ -1,0 +1,21 @@
+[Unit]
+Description=SeaweedFS filer
+Requires=seaweed-master.container seaweed-volume.container
+After=seaweed-master.container seaweed-volume.container
+
+[Container]
+Image=docker.io/chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
+ContainerName=seaweed-filer
+Network=postgres.network
+Volume=/persist/srv/seaweedfs/filer:/data
+Exec=filer -master=seaweed-master:9333 -ip=seaweed-filer -ip.bind=0.0.0.0 -port=8888 -defaultStoreDir=/data -defaultReplicaPlacement=000
+HealthCmd=wget -q --spider http://127.0.0.1:8888/healthz
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

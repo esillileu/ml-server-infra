@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+require_service_account
+
+TMP_DIRS=()
+cleanup_tmp_dirs() {
+  local directory
+  for directory in "${TMP_DIRS[@]}"; do
+    [[ -d "$directory" ]] || continue
+    rm -f "$directory"/*
+    rmdir "$directory"
+  done
+}
+trap cleanup_tmp_dirs EXIT
+
+usage() {
+  echo "usage: seaweed {bootstrap-buckets|verify-f1-known-good|status|smoke-f1|smoke-f2|test-s3-endpoint|smoke-multipart-f1|smoke-multipart-f2}" >&2
+  exit 2
+}
+
+bootstrap_buckets() {
+  need jq; need podman; need rclone
+  local tmp
+  tmp="$(mktemp -d)"; TMP_DIRS+=("$tmp")
+  local iam_json identity configured_access configured_secret
+  iam_json="$(secret_value seaweed_s3_config)"
+  while read -r identity access secret; do
+    configured_access="$(jq -er --arg name "$identity" '.identities[] | select(.name == $name) | .credentials[0].accessKey' <<<"$iam_json")"
+    configured_secret="$(jq -er --arg name "$identity" '.identities[] | select(.name == $name) | .credentials[0].secretKey' <<<"$iam_json")"
+    [[ "$configured_access" == "$(secret_value "$access")" && "$configured_secret" == "$(secret_value "$secret")" ]] || {
+      echo "ERROR: $identity credentials differ between seaweed_s3_config and service secrets" >&2
+      exit 1
+    }
+  done <<'EOF'
+bootstrap-admin seaweed_s3_admin_access_key seaweed_s3_admin_secret_key
+mlflow-f1 mlflow_f1_s3_access_key mlflow_f1_s3_secret_key
+mlflow-f2 mlflow_f2_s3_access_key mlflow_f2_s3_secret_key
+f2-corpus f2_corpus_s3_access_key f2_corpus_s3_secret_key
+EOF
+  unset iam_json configured_access configured_secret
+  make_rclone_config seaweed_s3_admin_access_key seaweed_s3_admin_secret_key "$tmp/admin.conf" false
+  for bucket in mlflow-f1-artifacts mlflow-f2-artifacts f2-corpus; do
+    rclone mkdir "seaweed:$bucket" --config "$tmp/admin.conf"
+  done
+  local name access secret allowed candidate config sentinel_hash downloaded_hash
+  printf 'SeaweedFS bootstrap credential test\n' >"$tmp/sentinel"
+  sentinel_hash="$(sha256sum "$tmp/sentinel" | awk '{print $1}')"
+  while read -r name access secret allowed; do
+    config="$tmp/$name.conf"; make_rclone_config "$access" "$secret" "$config"
+    rclone lsf "seaweed:$allowed" --config "$config" >/dev/null
+    if rclone cat "seaweed:$allowed/_infra/bootstrap-sentinel" --config "$config" >"$tmp/$name.download" 2>/dev/null; then
+      downloaded_hash="$(sha256sum "$tmp/$name.download" | awk '{print $1}')"
+      [[ "$sentinel_hash" == "$downloaded_hash" ]] || {
+        echo "ERROR: existing $name bootstrap sentinel has different content" >&2; exit 1;
+      }
+    else
+      rclone copyto "$tmp/sentinel" "seaweed:$allowed/_infra/bootstrap-sentinel" --config "$config" --immutable
+      downloaded_hash="$(rclone cat "seaweed:$allowed/_infra/bootstrap-sentinel" --config "$config" | sha256sum | awk '{print $1}')"
+    fi
+    [[ "$sentinel_hash" == "$downloaded_hash" ]] || { echo "ERROR: $name put/get checksum mismatch" >&2; exit 1; }
+    for candidate in mlflow-f1-artifacts mlflow-f2-artifacts f2-corpus; do
+      [[ "$candidate" == "$allowed" ]] && continue
+      if rclone lsf "seaweed:$candidate" --config "$config" >/dev/null 2>&1; then
+        echo "ERROR: $name credential can access forbidden bucket $candidate" >&2; exit 1
+      fi
+    done
+  done <<'EOF'
+f1 mlflow_f1_s3_access_key mlflow_f1_s3_secret_key mlflow-f1-artifacts
+f2 mlflow_f2_s3_access_key mlflow_f2_s3_secret_key mlflow-f2-artifacts
+corpus f2_corpus_s3_access_key f2_corpus_s3_secret_key f2-corpus
+EOF
+  echo 'OK buckets exist and sampled cross-bucket access was denied'
+}
+
+status() {
+  need curl; need podman
+  for url in http://127.0.0.1:9000/healthz http://127.0.0.1:5001/mlflow-f1/health http://127.0.0.1:5002/mlflow-f2/health; do
+    if curl -fsS --max-time 3 "$url" >/dev/null; then echo "UP $url"; else echo "DOWN $url"; fi
+  done
+  podman ps --filter 'name=seaweed-' --format '{{.Names}} {{.Status}}'
+  if command -v rclone >/dev/null && podman secret exists seaweed_s3_admin_access_key; then
+    local tmp; tmp="$(mktemp -d)"; TMP_DIRS+=("$tmp")
+    make_rclone_config seaweed_s3_admin_access_key seaweed_s3_admin_secret_key "$tmp/rclone.conf"
+    rclone lsd seaweed: --config "$tmp/rclone.conf"
+  fi
+}
+
+smoke_mlflow() {
+  local instance=$1
+  need podman
+  podman exec -i -e "MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-$instance" "mlflow_$instance" \
+    python - <"$SCRIPT_DIR/smoke_mlflow.py"
+}
+
+verify_f1_known_good() {
+  need jq; need podman
+  local config="$SCRIPT_DIR/f1_known_good_artifact.json"
+  [[ -f "$config" ]] || { echo "ERROR: missing $config" >&2; exit 1; }
+  local run_id artifact_path expected
+  run_id="$(jq -er .run_id "$config")"
+  artifact_path="$(jq -er .artifact_path "$config")"
+  expected="$(jq -er .sha256 "$config")"
+  podman exec -i \
+    -e MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-f1 \
+    -e "RUN_ID=$run_id" -e "ARTIFACT_PATH=$artifact_path" -e "EXPECTED_SHA256=$expected" \
+    mlflow_f1 python - <"$SCRIPT_DIR/verify_known_good.py"
+}
+
+smoke_multipart() {
+  local instance=$1
+  need podman
+  podman exec -i -e "MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow-$instance" "mlflow_$instance" \
+    python - <"$SCRIPT_DIR/smoke_multipart.py"
+}
+
+test_s3_endpoint() {
+  local endpoint=${1:-https://esillileu-server.tail4941d3.ts.net:9000}
+  need python3; need podman
+  python3 "$SCRIPT_DIR/test_s3_compatibility.py" --endpoint "$endpoint"
+}
+
+case "${1:-}" in
+  bootstrap-buckets) bootstrap_buckets ;;
+  verify-f1-known-good) verify_f1_known_good ;;
+  status) status ;;
+  smoke-f1) smoke_mlflow f1 ;;
+  smoke-f2) smoke_mlflow f2 ;;
+  smoke-multipart-f1) smoke_multipart f1 ;;
+  smoke-multipart-f2) smoke_multipart f2 ;;
+  test-s3-endpoint) shift; test_s3_endpoint "$@" ;;
+  *) usage ;;
+esac
